@@ -20,24 +20,29 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class FileTaskExecutor {
-    private String workingDirectory;
-    private Stream<Path> filesStream;
-    private Path workingDirectoryPath;
+    private final Path workingDirectoryPath;
 
-    public FileTaskExecutor(String workingDirectory) {
-        this.workingDirectory = workingDirectory;
+    private FileTaskExecutor(Path workingDirectoryPath) {
+        this.workingDirectoryPath = workingDirectoryPath;
+    }
+
+    public static FileTaskExecutor createFileTaskExecutor(String workingDirectory) {
         try {
-            workingDirectoryPath = Paths.get(workingDirectory);
-            filesStream = Files.walk(workingDirectoryPath);
-        } catch (IOException e) {
+            Path workingDirectoryPath = Paths.get(workingDirectory);
+            return new FileTaskExecutor(workingDirectoryPath);
+        } catch (InvalidPathException e) {
             System.out.println("Incorrect working directory: " + e.getMessage());
         }
+        return null;
     }
 
     public void execute(Task task) {
         System.out.println("Task: " + task.getName() + " started.");
         try {
             List<File> matchedFiles = this.matchFiles(task.getMatchers());
+            if (matchedFiles == null) {
+                return;
+            }
             switch (task.getAction().getActionName()) {
                 case delete:
                     matchedFiles.forEach(this::deleteFile);
@@ -89,50 +94,19 @@ public class FileTaskExecutor {
         return copyPath.resolve(relativePath).toFile();
     }
 
-    private List<File> matchFiles(List<Matcher> matchers) throws DateTimeParseException {
-        List<File> result = filesStream.filter(Files::isRegularFile)
-                .map(Path::toFile)
-                .collect(Collectors.toList());
-        for (Matcher matcher : matchers) {
-            switch (matcher.getMatcherRule()) {
-                case extensionIsNot:
-                    result = result.stream()
-                            .filter(x -> !FilenameUtils.isExtension(x.getName(), matcher.getParam()))
-                            .collect(Collectors.toList());
-                    break;
-                case extensionIs:
-                    result = result.stream()
-                            .filter(x -> FilenameUtils.isExtension(x.getName(), matcher.getParam()))
-                            .collect(Collectors.toList());
-                    break;
-                case nameContains:
-                    result = result.stream()
-                            .filter(x -> x.getName().contains(matcher.getParam()))
-                            .collect(Collectors.toList());
-                    break;
-                case modifiedDateLessThen:
-                    long dateInMilli = LocalDate.parse(matcher.getParam(), DateTimeFormatter.BASIC_ISO_DATE)
-                            .atStartOfDay()
-                            .atZone(ZoneId.systemDefault())
-                            .toInstant()
-                            .toEpochMilli();
-                    result = result.stream()
-                            .filter(x -> x.lastModified() < dateInMilli)
-                            .collect(Collectors.toList());
-                    break;
-                case modifiedDateGreaterThen:
-                    long dateInMilli1 = LocalDate.parse(matcher.getParam(), DateTimeFormatter.BASIC_ISO_DATE)
-                            .plusDays(1)
-                            .atStartOfDay()
-                            .atZone(ZoneId.systemDefault())
-                            .toInstant()
-                            .toEpochMilli();
-                    result = result.stream()
-                            .filter(x -> x.lastModified() > dateInMilli1)
-                            .collect(Collectors.toList());
-                    break;
-            }
+    private boolean filterFile(File file, List<Matcher> matchers) {
+        return matchers.stream().allMatch(matcher -> matcher.match(file));
+    }
+
+    private List<File> matchFiles(List<Matcher> matchers) {
+        try (Stream<Path> filesStream = Files.walk(workingDirectoryPath)) {
+            return filesStream.filter(Files::isRegularFile)
+                    .map(Path::toFile)
+                    .filter(file -> filterFile(file, matchers))
+                    .collect(Collectors.toList());
+        } catch (IOException e) {
+            System.out.println("Incorrect working directory: " + e.getMessage());
         }
-        return result;
+        return null;
     }
 }
